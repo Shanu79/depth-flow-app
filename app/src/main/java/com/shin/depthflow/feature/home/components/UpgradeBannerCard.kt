@@ -21,8 +21,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shin.depthflow.ui.theme.BlendGlowColor
-import com.shin.depthflow.ui.theme.CardSurfaceBottom
-import com.shin.depthflow.ui.theme.CardSurfaceTop
 import com.shin.depthflow.ui.theme.DepthFlowLightPurple
 import com.shin.depthflow.ui.theme.TextPrimary
 import com.shin.depthflow.ui.theme.TextSecondary
@@ -33,13 +31,6 @@ fun UpgradeBannerCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    // Assuming your centralized theme colors are available:
-    // val CardSurfaceTop = Color(0xFF1E1C38)
-    // val CardSurfaceBottom = Color(0xFF0F0F1B)
-    // val BlendGlowColor = Color(0xFF9034EA)
-    // val TextPrimary = Color.White
-    // val TextSecondary = Color(0xFF9E9EB8)
-    // val DepthFlowLightPurple = Color(0xFFB42BFE)
 
     val borderBrush = Brush.linearGradient(
         colors = listOf(BlendGlowColor.copy(alpha = 0.4f), Color.Transparent, BlendGlowColor.copy(alpha = 0.1f))

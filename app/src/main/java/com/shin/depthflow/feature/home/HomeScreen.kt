@@ -56,6 +56,7 @@ import com.shin.depthflow.viewmodel.DepthFlowViewModel
 @Composable
 fun DepthFlowHomeScreen(
     onNavigateToWorkspace: () -> Unit,
+    onNavigateToPricing: () -> Unit,
     viewModel: DepthFlowViewModel = viewModel()
 ) {
     // Use a Box as the root
@@ -76,7 +77,7 @@ fun DepthFlowHomeScreen(
                     )
                 }
                 item {
-                    UpgradeBannerCard(onClick = {})
+                    UpgradeBannerCard(onClick = onNavigateToPricing)
                 }
                 item {
                     Spacer(Modifier.height(120.dp))

@@ -106,7 +106,8 @@ fun ProfileScreen(
     onNavigateToBilling: () -> Unit,
     onNavigateToFAQ: () -> Unit,
     onNavigateToMyProjects: () -> Unit,
-    onNavigateToEditProfile: () -> Unit
+    onNavigateToEditProfile: () -> Unit,
+    onNavigateToPricing: () -> Unit
 ) {
     val isLoading by viewModel.isProfileLoading.collectAsState()
     val isNetworkAvailable by viewModel.isNetworkAvailable.collectAsState()
@@ -114,6 +115,7 @@ fun ProfileScreen(
     val fullName by viewModel.userFullName.collectAsState()
     val plan by viewModel.userPlan.collectAsState()
     val profilePic by viewModel.userProfilePic.collectAsState()
+    val subStatus by viewModel.subscriptionStatus.collectAsState()
 
     // Dynamic state placeholders for missing data
     val joinDate by viewModel.userJoinDate.collectAsState()
@@ -149,7 +151,7 @@ fun ProfileScreen(
             ProfileHeaderCard(fullName, email, plan, profilePic, joinDate, onNavigateToEditProfile)
 
             // 2. Active Plan Configuration (New direct implementation)
-            PlanCard(plan, planRenewalDate)
+            PlanCard(plan, planRenewalDate, subStatus, onManageClick = onNavigateToBilling)
 
             // 3. Grouped Application Menu Items (Redesigned)
             ActionMenu(
@@ -160,7 +162,7 @@ fun ProfileScreen(
                 onNavigateToMyProjects = onNavigateToMyProjects
             )
 
-            UpgradeBannerCard(onClick = {})
+            UpgradeBannerCard(onClick = onNavigateToPricing)
         }
     }
 }
@@ -294,6 +296,8 @@ fun ProfileHeaderCard(fullName: String, email: String, plan: String, profilePic:
 fun PlanCard(
     plan: String,
     renewalDate: String,
+    subStatus: String,
+    onManageClick: () -> Unit
 ) {
 
     Row(
@@ -336,6 +340,8 @@ fun PlanCard(
             )
             // Column of texts from screenshot
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                val isCancelled = subStatus.contains("Scheduled for cancellation", ignoreCase = true)
+                
                 Text(text = "Current Plan", color = TextMuted, fontSize = 12.sp)
                 Text(
                     text = "${plan.lowercase().replaceFirstChar { it.uppercase() }} Plan", // Dynamic capitalization
@@ -343,14 +349,21 @@ fun PlanCard(
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Text(text = "Renews on $renewalDate", color = TextSecondary, fontSize = 12.sp)
+                
+                if (renewalDate != "N/A" && renewalDate.isNotEmpty()) {
+                    val label = if (isCancelled) "Ends on " else "Renews on "
+                    val dateColor = if (isCancelled) Color(0xFFF39C12) else Color(0xFF00C853)
+                    Text(text = "$label$renewalDate", color = dateColor, fontSize = 12.sp)
+                } else {
+                    Text(text = "Subscription Inactive", color = WarningRed, fontSize = 12.sp)
+                }
             }
         }
 
         // Manage Plan Button with arrow, using common outlined glass style
         OutlinedGlassButton(
             text = "Manage Plan",
-            onClick = { /* Manage Plan Action */ },
+            onClick = onManageClick,
             isManagePlan = true
         )
     }

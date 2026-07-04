@@ -137,7 +137,12 @@ data class UserProfileResponse(
     val profile_pic: String?, // Backend can return null
     val plan: String,
     val subscription_status: String?,
-    val billing_cycle: String?
+    val billing_cycle: String?,
+    val created_at: String?,
+    val next_credit_drop_date: String?,
+    val subscription_end_date: String?,
+    val api_plan: String?,
+    val api_subscription_status: String?
 )
 // Data class for sending the Google ID Token to the backend
 data class GoogleTokenRequest(
@@ -173,8 +178,10 @@ data class PurchaseVerificationRequest(
 
 data class PurchaseVerificationResponse(
     val status: String,
-    val message: String,
-    val credits_granted: Int
+    val message: String? = null,
+    val plan: String? = null,
+    val billing_cycle: String? = null,
+    val new_balance: Int? = null
 )
 
 data class PaymentHistoryItem(

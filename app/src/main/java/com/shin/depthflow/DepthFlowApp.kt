@@ -307,6 +307,9 @@ fun DepthFlowApp(
                                 navController.navigate(Routes.LOGIN)
                             }
                         },
+                        onNavigateToPricing = {
+                            navController.navigate(Routes.PRICING)
+                        }
                     )
                 }
 
@@ -370,6 +373,9 @@ fun DepthFlowApp(
                             },
                             onNavigateToEditProfile = {
                                 navController.navigate(Routes.EDIT_PROFILE)
+                            },
+                            onNavigateToPricing = {
+                                navController.navigate(Routes.PRICING)
                             }
                         )
                     }

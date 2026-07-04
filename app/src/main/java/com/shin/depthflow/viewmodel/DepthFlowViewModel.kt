@@ -25,6 +25,9 @@ import com.shin.depthflow.data.OTPVerifyRequest
 import com.shin.depthflow.data.RegisterRequest
 import com.shin.depthflow.data.SessionManager
 import com.shin.depthflow.data.PaymentHistoryItem
+import java.text.SimpleDateFormat
+import java.util.Locale
+import com.shin.depthflow.R
 import org.json.JSONObject
 import retrofit2.HttpException
 
@@ -69,14 +72,14 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 val response = repository.loginUser(email, password)
                 _loginToken.value = response.access_token
             } catch (e: retrofit2.HttpException) {
-                if (e.code() == 403) _authError.value = "Email not verified."
-                else if (e.code() == 401) _authError.value = "Incorrect email or password."
-                else _authError.value = "Server error. Please try again."
+                if (e.code() == 403) _authError.value = getApplication<Application>().getString(R.string.err_email_not_verified)
+                else if (e.code() == 401) _authError.value = getApplication<Application>().getString(R.string.err_incorrect_credentials)
+                else _authError.value = getApplication<Application>().getString(R.string.err_server_error)
             } catch (e: Exception) {
                 // ADD THIS LINE TO EXPOSE THE REAL ERROR:
                 Logger.e("NetworkDebug", "Retrofit Failed: ${e.message}", e)
 
-                _authError.value = "Network error. Check your connection."
+                _authError.value = getApplication<Application>().getString(R.string.err_network_error)
             } finally {
                 _isAuthLoading.value = false
             }
@@ -95,7 +98,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 _loginToken.value = response.access_token
                 _authError.value = null
             } catch (e: Exception) {
-                _authError.value = "Google login failed. Please try again."
+                _authError.value = getApplication<Application>().getString(R.string.err_google_login_failed)
                 Logger.e("Auth", "Google Error: ${e.message}", e)
             } finally {
                 _isAuthLoading.value = false
@@ -117,14 +120,14 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 val message = try {
                     if (!errorBody.isNullOrEmpty()) {
                         JSONObject(errorBody).getString("detail")
-                    } else "Registration failed"
+                    } else getApplication<Application>().getString(R.string.err_registration_failed)
                 } catch (jsonEx: Exception) {
-                    "Registration failed"
+                    getApplication<Application>().getString(R.string.err_registration_failed)
                 }
                 _authError.value = message
                 onError(message)
             } catch (e: Exception) {
-                val msg = e.message ?: "Registration failed"
+                val msg = e.message ?: getApplication<Application>().getString(R.string.err_registration_failed)
                 _authError.value = msg
                 onError(msg)
             } finally {
@@ -142,9 +145,9 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 val response = repository.verifyOtp(request)
                 setAuthToken(response.access_token)
                 _loginToken.value = response.access_token
-                onSuccess("Email verified successfully")
+                onSuccess(getApplication<Application>().getString(R.string.msg_email_verified))
             } catch (e: Exception) {
-                onError(e.message ?: "OTP Verification failed")
+                onError(e.message ?: getApplication<Application>().getString(R.string.err_otp_verification_failed))
             } finally {
                 _isAuthLoading.value = false
             }
@@ -160,7 +163,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 _registrationEmail.value = email // Track for the reset screen
                 onSuccess(response.message)
             } catch (e: Exception) {
-                onError(e.message ?: "Failed to request reset")
+                onError(e.message ?: getApplication<Application>().getString(R.string.err_failed_request_reset))
             } finally {
                 _isAuthLoading.value = false
             }
@@ -176,7 +179,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 val response = repository.resetPassword(request)
                 onSuccess(response.message)
             } catch (e: Exception) {
-                onError(e.message ?: "Failed to reset password")
+                onError(e.message ?: getApplication<Application>().getString(R.string.err_failed_reset_password))
             } finally {
                 _isAuthLoading.value = false
             }
@@ -218,7 +221,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
     private val _selectedImageUri = MutableStateFlow<Uri?>(null)
     val selectedImageUri: StateFlow<Uri?> = _selectedImageUri.asStateFlow()
 
-    private val _motionPath = MutableStateFlow("Circular Orbit")
+    private val _motionPath = MutableStateFlow(application.getString(R.string.default_motion_path))
     val motionPath: StateFlow<String> = _motionPath.asStateFlow()
 
     private val _depthIntensity = MutableStateFlow(0.85f)
@@ -309,9 +312,21 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
 
                 _credits.value = profile.credits
                 _userEmail.value = profile.email
-                _userFullName.value = profile.full_name ?: "DepthFlow User"
+                _userFullName.value = profile.full_name ?: getApplication<Application>().getString(R.string.default_user_name)
                 _userPlan.value = profile.plan
                 _subscriptionStatus.value = profile.subscription_status ?: "inactive"
+
+                // Real Join Date parsing
+                profile.created_at?.let { rawDate ->
+                    _userJoinDate.value = formatJoinDate(rawDate)
+                } ?: run {
+                    _userJoinDate.value = "N/A"
+                }
+
+                // Parse Next Credit Drop Date (New from Python Model)
+                profile.next_credit_drop_date?.let { rawDate ->
+                    _nextCreditDropDate.value = formatRenewalDate(rawDate)
+                }
 
                 Logger.d("DepthFlowAuth", "✅ Profile synced: ${profile.email} (${profile.credits} Credits)")
 
@@ -352,6 +367,20 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 val billing = repository.fetchBillingInfo(token)
                 _billingInfo.value = billing
+                
+                // Real Renewal Date parsing
+                val status = billing.platform.status
+                val nextBilling = billing.platform.next_billing_date
+
+                if (status.contains("Scheduled for cancellation", ignoreCase = true)) {
+                    // Extract date from "Scheduled for cancellation on 2027-05-21"
+                    val extractedDate = status.substringAfterLast(" ").trim().removeSuffix(".")
+                    _userPlanRenewalDate.value = formatRenewalDate(extractedDate)
+                } else if (!nextBilling.isNullOrEmpty() && nextBilling != "N/A") {
+                    _userPlanRenewalDate.value = formatRenewalDate(nextBilling)
+                } else {
+                    _userPlanRenewalDate.value = "N/A"
+                }
             } catch (e: Exception) {
                 Logger.e("DepthFlow", "Failed to fetch billing", e)
             }
@@ -375,9 +404,13 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 Logger.d("BillingTest", "6. Verifying with backend: $productId")
                 val response = repository.verifyPurchase(token, purchaseToken, productId)
-                Logger.d("BillingTest", "7. Success! Granted: ${response.credits_granted}")
+                Logger.d("BillingTest", "7. Success! Status: ${response.status}, New Balance: ${response.new_balance}")
                 
-                // Refresh the whole profile to get the new credit balance immediately
+                // Update local states immediately if provided
+                response.new_balance?.let { _credits.value = it }
+                response.plan?.let { _userPlan.value = it }
+                
+                // Refresh the whole profile to get all new credit/plan details safely
                 fetchUserProfile()
                 fetchBillingInfo() // NEW: Also refresh billing info
             } catch (e: Exception) {
@@ -400,7 +433,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 fetchBillingInfo()
                 onSuccess(response.message)
             } catch (e: Exception) {
-                onError(e.message ?: "Failed to cancel subscription")
+                onError(e.message ?: getApplication<Application>().getString(R.string.err_failed_cancel_subscription))
             }
         }
     }
@@ -419,7 +452,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 fetchBillingInfo()
                 onSuccess(response.message)
             } catch (e: Exception) {
-                onError(e.message ?: "Failed to resubscribe")
+                onError(e.message ?: getApplication<Application>().getString(R.string.err_failed_resubscribe))
             }
         }
     }
@@ -477,12 +510,12 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
         val token = jwtToken
 
         if (token == null) {
-            _uiState.value = PipelineState.Error("Please log in to generate 3D images.")
+            _uiState.value = PipelineState.Error(getApplication<Application>().getString(R.string.err_login_required))
             return
         }
 
         if (uri == null) {
-            _uiState.value = PipelineState.Error("Please select a 2D source image first.")
+            _uiState.value = PipelineState.Error(getApplication<Application>().getString(R.string.err_select_image_first))
             return
         }
 
@@ -496,7 +529,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
         }
 
         if (_credits.value < dynamicCost) {
-            _uiState.value = PipelineState.Error("Insufficient credits. You need at least $dynamicCost credits.")
+            _uiState.value = PipelineState.Error(getApplication<Application>().getString(R.string.err_insufficient_credits, dynamicCost))
             return
         }
 
@@ -563,9 +596,9 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                     sessionManager.saveProfilePic(it.toString())
                 }
                 
-                onSuccess("Profile updated successfully")
+                onSuccess(getApplication<Application>().getString(R.string.msg_profile_updated))
             } catch (e: Exception) {
-                onError(e.message ?: "Failed to update profile")
+                onError(e.message ?: getApplication<Application>().getString(R.string.err_failed_update_profile))
             }
         }
     }
@@ -579,32 +612,58 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             try {
                 repository.changePassword(token, request)
-                onSuccess("Password changed successfully")
+                onSuccess(getApplication<Application>().getString(R.string.msg_password_changed))
             } catch (e: Exception) {
-                onError(e.message ?: "Failed to change password")
+                onError(e.message ?: getApplication<Application>().getString(R.string.err_failed_change_password))
             }
         }
     }
 
-    private val _userJoinDate = MutableStateFlow("May 2024") // Dummy default
+    private val _userJoinDate = MutableStateFlow("")
     val userJoinDate: StateFlow<String> = _userJoinDate.asStateFlow()
 
-    private val _userPlanRenewalDate = MutableStateFlow("25 May 2025") // Dummy default
+    private val _userPlanRenewalDate = MutableStateFlow("")
     val userPlanRenewalDate: StateFlow<String> = _userPlanRenewalDate.asStateFlow()
+
+    private val _nextCreditDropDate = MutableStateFlow("")
+    val nextCreditDropDate: StateFlow<String> = _nextCreditDropDate.asStateFlow()
+
+    private fun formatJoinDate(rawDate: String): String {
+        if (rawDate.isEmpty() || rawDate == "N/A") return "N/A"
+        return try {
+            // Attempt to handle both ISO (with T) and simple YYYY-MM-DD
+            val dateStr = if (rawDate.contains("T")) rawDate.substringBefore("T") else rawDate
+            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+            val date = sdf.parse(dateStr)
+            SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(date!!)
+        } catch (e: Exception) {
+            Logger.e("DateParsing", "Failed to parse Join Date: $rawDate", e)
+            rawDate
+        }
+    }
+
+    private fun formatRenewalDate(rawDate: String): String {
+        if (rawDate.isEmpty() || rawDate == "N/A") return "N/A"
+        return try {
+            val dateStr = if (rawDate.contains("T")) rawDate.substringBefore("T") else rawDate
+            val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+            val date = sdf.parse(dateStr)
+            SimpleDateFormat("d MMMM yyyy", Locale.getDefault()).format(date!!)
+        } catch (e: Exception) {
+            Logger.e("DateParsing", "Failed to parse Renewal Date: $rawDate", e)
+            rawDate
+        }
+    }
 
     // --- Dummy Functions ---
     // You can call these to simulate data updates, or eventually
     // replace them by parsing these dates from your repository's profile object.
 
     fun loadDummyProfileDates() {
-        viewModelScope.launch {
-            // Simulating parsing/fetching dates
-            _userJoinDate.value = "May 2024"
-            _userPlanRenewalDate.value = "25 May 2025"
-        }
+        // No longer needed as we use real data
     }
 
-    private val _activeSettingsTab = MutableStateFlow("Basic")
+    private val _activeSettingsTab = MutableStateFlow(application.getString(R.string.default_settings_tab))
     val activeSettingsTab = _activeSettingsTab.asStateFlow()
 
     fun setActiveSettingsTab(tab: String) {
@@ -620,15 +679,15 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
     val lengthValue = _lengthValue.asStateFlow()
     fun setLengthValue(value: Float) { _lengthValue.value = value }
 
-    private val _ssaaValue = MutableStateFlow("1.0x")
+    private val _ssaaValue = MutableStateFlow(application.getString(R.string.default_ssaa))
     val ssaaValue = _ssaaValue.asStateFlow()
     fun setSsaaValue(value: String) { _ssaaValue.value = value }
 
-    private val _fpsValue = MutableStateFlow("30p")
+    private val _fpsValue = MutableStateFlow(application.getString(R.string.default_fps))
     val fpsValue = _fpsValue.asStateFlow()
     fun setFpsValue(value: String) { _fpsValue.value = value }
 
-    private val _cameraStyle = MutableStateFlow("Dolly")
+    private val _cameraStyle = MutableStateFlow(application.getString(R.string.default_camera_style))
     val cameraStyle = _cameraStyle.asStateFlow()
     fun setCameraStyle(value: String) { _cameraStyle.value = value }
 
@@ -640,11 +699,11 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
     val cinematicIntensity = _cinematicIntensity.asStateFlow()
     fun setCinematicIntensity(value: Float) { _cinematicIntensity.value = value }
 
-    private val _bokehQuality = MutableStateFlow("Low (50)")
+    private val _bokehQuality = MutableStateFlow(application.getString(R.string.default_bokeh_quality))
     val bokehQuality = _bokehQuality.asStateFlow()
     fun setBokehQuality(value: String) { _bokehQuality.value = value }
 
-    private val _motionMode = MutableStateFlow("Loop")
+    private val _motionMode = MutableStateFlow(application.getString(R.string.default_motion_mode))
     val motionMode = _motionMode.asStateFlow()
     fun setMotionMode(value: String) { _motionMode.value = value }
 }
