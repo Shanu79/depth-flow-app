@@ -12,11 +12,13 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -34,7 +36,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -49,6 +54,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.wear.compose.materialcore.screenHeightDp
 import com.shin.depthflow.data.PipelineState
 import com.shin.depthflow.feature.profile.NoInternetCard
 import com.shin.depthflow.feature.profile.shimmerEffect
@@ -72,9 +80,16 @@ private val NeonIndigo = Color(0xFF8C52FF)
 fun WorkspaceScreen(
     viewModel: DepthFlowViewModel,
     navController: NavController,
-    userCredits: Int
+    userCredits: Int,
+    happyHourViewModel: com.shin.depthflow.viewmodel.HappyHourViewModel
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    // Happy Hour: UI hint only. The server decides whether a generation is actually free.
+    val unlimited by happyHourViewModel.isUnlimited.collectAsState()
+    // A finished generation changes the video allowance: refetch the authoritative status.
+    LaunchedEffect(uiState) {
+        if (uiState is PipelineState.Success) happyHourViewModel.refresh()
+    }
     val selectedImageUri by viewModel.selectedImageUri.collectAsState()
     val motionPath by viewModel.motionPath.collectAsState()
     val depthIntensity by viewModel.depthIntensity.collectAsState()
@@ -86,15 +101,35 @@ fun WorkspaceScreen(
     val lengthValue by viewModel.lengthValue.collectAsState()
     val ssaaValue by viewModel.ssaaValue.collectAsState()
     val fpsValue by viewModel.fpsValue.collectAsState()
-    val cameraStyle by viewModel.cameraStyle.collectAsState()
     val focusValue by viewModel.focusValue.collectAsState()
     val cinematicIntensity by viewModel.cinematicIntensity.collectAsState()
     val bokehQuality by viewModel.bokehQuality.collectAsState()
-    val motionMode by viewModel.motionMode.collectAsState()
-
-    var activeSegmentTab by remember { mutableStateOf("Input") }
+    
+    val reverseMode by viewModel.reverseMode.collectAsState()
+    val smoothMode by viewModel.smoothMode.collectAsState()
+    val loopMode by viewModel.loopMode.collectAsState()
 
     val context = LocalContext.current
+    val configuration = LocalWindowInfo.current
+    val density = LocalDensity.current
+    val screenHeightPx = configuration.containerSize.height.toFloat()
+    val buttonVisibilityThreshold = with(density) { 110.dp.toPx() }
+
+    val shouldScroll by viewModel.shouldScrollToSettings.collectAsState()
+    val scrollState = rememberScrollState()
+    var settingsYPosition by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(shouldScroll, settingsYPosition) {
+        if (shouldScroll && settingsYPosition > 0) {
+            // Scrolling to the settings area Y position.
+            // We add a small offset (20dp) to bring the tabs closer to the top rim.
+            val scrollTarget = settingsYPosition
+            scrollState.animateScrollTo(scrollTarget)
+            viewModel.setScrollTrigger(false)
+        }
+    }
+
+    var activeSegmentTab by remember { mutableStateOf("Input") }
 
     val imageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -116,70 +151,139 @@ fun WorkspaceScreen(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(start = 16.dp, end = 16.dp, bottom = 140.dp),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Create 3D Image", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = NeonPurple, modifier = Modifier.size(20.dp))
-            }
-            Text("Transform your ideas into stunning 3D visuals with AI", color = TextMuted, fontSize = 13.sp)
-        }
+    var isGenerateButtonVisible by remember { mutableStateOf(true) }
 
-        if (!isNetworkAvailable) {
-            NoInternetCard(onRetry = { viewModel.fetchUserProfile() })
-        } else if (isProfileLoading) {
-            LoadingWorkspaceArea()
-            LoadingWorkspaceSettings()
-        } else {
-            WorkspaceUploadArea(
-                activeSegmentTab = activeSegmentTab,
-                onTabSelected = { activeSegmentTab = it },
-                selectedImageUri = selectedImageUri,
-                onUploadClick = { imageLauncher.launch("image/*") },
-                uiState = uiState,
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(start = 16.dp, end = 16.dp, bottom = 140.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Create 3D Image", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = NeonPurple, modifier = Modifier.size(20.dp))
+                }
+                Text("Transform your ideas into stunning 3D visuals with AI", color = TextMuted, fontSize = 13.sp)
+            }
+
+            com.shin.depthflow.feature.happyhour.HappyHourBanner(
+                viewModel = happyHourViewModel,
+                onOpen = { navController.navigate(Routes.HAPPY_HOUR) }
             )
 
-            WorkspaceSettingsArea(
-                depthIntensity = depthIntensity,
-                onIntensityChange = { viewModel.setDepthIntensity(it) },
-                motionPath = motionPath,
-                onMotionPathChange = { viewModel.setMotionPath(it) },
-                speedValue = speedValue,
-                onSpeedChange = { viewModel.setSpeedValue(it) },
-                lengthValue = lengthValue,
-                onLengthChange = { viewModel.setLengthValue(it) },
-                ssaaValue = ssaaValue,
-                onSsaaChange = { viewModel.setSsaaValue(it) },
-                fpsValue = fpsValue,
-                onFpsChange = { viewModel.setFpsValue(it) },
-                cameraStyle = cameraStyle,
-                onStyleChange = { viewModel.setCameraStyle(it) },
-                focusValue = focusValue,
-                onFocusChange = { viewModel.setFocusValue(it) },
-                cinematicIntensity = cinematicIntensity,
-                onCinematicIntensityChange = { viewModel.setCinematicIntensity(it) },
-                bokehQuality = bokehQuality,
-                onBokehChange = { viewModel.setBokehQuality(it) },
-                motionMode = motionMode,
-                onModeChange = { viewModel.setMotionMode(it) },
-                userCredits = userCredits,
-                onGenerateClick = {
-                    activeSegmentTab = "Result"
-                    viewModel.generate3DMotion()
+            if (!isNetworkAvailable) {
+                NoInternetCard(onRetry = { viewModel.fetchUserProfile() })
+            } else if (isProfileLoading) {
+                LoadingWorkspaceArea()
+                LoadingWorkspaceSettings()
+            } else {
+                WorkspaceUploadArea(
+                    activeSegmentTab = activeSegmentTab,
+                    onTabSelected = { activeSegmentTab = it },
+                    selectedImageUri = selectedImageUri,
+                    onUploadClick = { imageLauncher.launch("image/*") },
+                    uiState = uiState,
+                )
+
+                WorkspaceSettingsArea(
+                    depthIntensity = depthIntensity,
+                    onIntensityChange = { viewModel.setDepthIntensity(it) },
+                    motionPath = motionPath,
+                    onMotionPathChange = { viewModel.setMotionPath(it) },
+                    speedValue = speedValue,
+                    onSpeedChange = { viewModel.setSpeedValue(it) },
+                    lengthValue = lengthValue,
+                    onLengthChange = { viewModel.setLengthValue(it) },
+                    ssaaValue = ssaaValue,
+                    onSsaaChange = { viewModel.setSsaaValue(it) },
+                    fpsValue = fpsValue,
+                    onFpsChange = { viewModel.setFpsValue(it) },
+                    focusValue = focusValue,
+                    onFocusChange = { viewModel.setFocusValue(it) },
+                    cinematicIntensity = cinematicIntensity,
+                    onCinematicIntensityChange = { viewModel.setCinematicIntensity(it) },
+                    bokehQuality = bokehQuality,
+                    onBokehChange = { viewModel.setBokehQuality(it) },
+                    reverseMode = reverseMode,
+                    onReverseChange = { viewModel.setReverseMode(it) },
+                    smoothMode = smoothMode,
+                    onSmoothChange = { viewModel.setSmoothMode(it) },
+                    loopMode = loopMode,
+                    onLoopChange = { viewModel.setLoopMode(it) },
+                    userCredits = userCredits,
+                    unlimited = unlimited,
+                    onGenerateClick = {
+                        activeSegmentTab = "Result"
+                        viewModel.generate3DMotion(skipCreditCheck = unlimited)
+                    },
+                    onBuyCreditsClick = {
+                        // Navigate to billing/pricing screen
+                         navController.navigate(Routes.PRICING)
+                    },
+                    isGenerating = uiState is PipelineState.Uploading || uiState is PipelineState.Processing,
+                    activeTab = activeSettingsTab,
+                    onTabChange = { viewModel.setActiveSettingsTab(it) },
+                    isStaticButtonVisible = isGenerateButtonVisible,
+                    onButtonPositioned = { coords ->
+                        val bounds = coords.boundsInWindow()
+                        // Button is considered "visible" (static) only when it's scrolled up enough
+                        // to smoothly transition from the floating button.
+                        isGenerateButtonVisible = bounds.top < (screenHeightPx - buttonVisibilityThreshold) && bounds.bottom > 0
+                    },
+                    modifier = Modifier.onGloballyPositioned {
+                        settingsYPosition = it.positionInParent().y.toInt()
+                    }
+                )
+            }
+        }
+
+        // Floating Generate Button
+        val isGenerating = uiState is PipelineState.Uploading || uiState is PipelineState.Processing
+        val lengthValueForCost by viewModel.lengthValue.collectAsState()
+        val calculatedCost = when {
+            lengthValueForCost > 20f -> 30
+            lengthValueForCost > 10f -> 25
+            else -> 20
+        }
+
+        AnimatedVisibility(
+            visible = !isGenerateButtonVisible && !isProfileLoading && isNetworkAvailable,
+            enter = fadeIn(tween(400)) + scaleIn(tween(400), initialScale = 0.9f) + slideInVertically(tween(400)) { it / 2 },
+            exit = fadeOut(tween(300)) + scaleOut(tween(300), targetScale = 0.9f) + slideOutVertically(tween(300)) { it / 2 },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 100.dp)
+                .padding(horizontal = 24.dp)
+        ) {
+            var showInsufficientCreditsModal by remember { mutableStateOf(false) }
+
+            InsufficientCreditsDialog(
+                requiredCredits = calculatedCost,
+                currentCredits = userCredits,
+                onDismiss = { showInsufficientCreditsModal = false },
+                onBuyCredits = {
+                    showInsufficientCreditsModal = false
+                    navController.navigate(Routes.PRICING)
                 },
-                onBuyCreditsClick = {
-                    // Navigate to billing/pricing screen
-                     navController.navigate(Routes.PRICING)
+                isVisible = showInsufficientCreditsModal
+            )
+
+            GlassmorphicButton(
+                text = if (isGenerating) "Generating..." else if (unlimited) "Generate 3D Image (Unlimited)" else "Generate 3D Image",
+                icon = Icons.Default.AutoAwesome,
+                onClick = {
+                    if (!unlimited && userCredits < calculatedCost) {
+                        showInsufficientCreditsModal = true
+                    } else {
+                        activeSegmentTab = "Result"
+                        viewModel.generate3DMotion(skipCreditCheck = unlimited)
+                    }
                 },
-                isGenerating = uiState is PipelineState.Uploading || uiState is PipelineState.Processing,
-                activeTab = activeSettingsTab,
-                onTabChange = { viewModel.setActiveSettingsTab(it) }
+                enabled = !isGenerating,
+                modifier = Modifier.fillMaxWidth()
             )
         }
     }
@@ -287,7 +391,38 @@ fun WorkspaceUploadArea(
                         val state = uiState
                         when (state) {
                             is PipelineState.Success -> {
-                                UriVideoPlayer(videoUri = state.videoUri, modifier = Modifier.fillMaxSize())
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    UriVideoPlayer(videoUri = state.videoUri, modifier = Modifier.fillMaxSize())
+                                    
+                                    // Motion Style Chip
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(12.dp)
+                                            .align(Alignment.TopStart)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color.Black.copy(alpha = 0.5f))
+                                            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.AutoAwesome,
+                                                contentDescription = null,
+                                                tint = NeonPurple,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Text(
+                                                text = state.motionPath,
+                                                color = Color.White,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
                             }
                             is PipelineState.Uploading, is PipelineState.Processing -> {
                                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -487,22 +622,28 @@ private fun WorkspaceSettingsArea(
     onSsaaChange: (String) -> Unit,
     fpsValue: String,
     onFpsChange: (String) -> Unit,
-    cameraStyle: String,
-    onStyleChange: (String) -> Unit,
     focusValue: Float,
     onFocusChange: (Float) -> Unit,
     cinematicIntensity: Float,
     onCinematicIntensityChange: (Float) -> Unit,
     bokehQuality: String,
     onBokehChange: (String) -> Unit,
-    motionMode: String,
-    onModeChange: (String) -> Unit,
+    reverseMode: Boolean,
+    onReverseChange: (Boolean) -> Unit,
+    smoothMode: Boolean,
+    onSmoothChange: (Boolean) -> Unit,
+    loopMode: Boolean,
+    onLoopChange: (Boolean) -> Unit,
     userCredits: Int,
+    unlimited: Boolean,
     onGenerateClick: () -> Unit,
     onBuyCreditsClick: () -> Unit,
     isGenerating: Boolean,
     activeTab: String,
-    onTabChange: (String) -> Unit
+    onTabChange: (String) -> Unit,
+    isStaticButtonVisible: Boolean,
+    onButtonPositioned: (androidx.compose.ui.layout.LayoutCoordinates) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var showInsufficientCreditsModal by remember { mutableStateOf(false) }
 
@@ -536,7 +677,7 @@ private fun WorkspaceSettingsArea(
     )
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(24.dp))
             .background(cardBackgroundBrush)
@@ -571,7 +712,7 @@ private fun WorkspaceSettingsArea(
             if (activeTab == "Basic") {
                 BasicSettingsContent(depthIntensity, onIntensityChange, speedValue, onSpeedChange, lengthValue, onLengthChange, motionPath, onMotionPathChange)
             } else {
-                AdvancedSettingsContent(lengthValue, onLengthChange, ssaaValue, onSsaaChange, fpsValue, onFpsChange, cameraStyle, onStyleChange, motionMode, onModeChange, speedValue, onSpeedChange, focusValue, onFocusChange, cinematicIntensity, onCinematicIntensityChange, bokehQuality, onBokehChange)
+                AdvancedSettingsContent(lengthValue, onLengthChange, ssaaValue, onSsaaChange, fpsValue, onFpsChange, motionPath, onMotionPathChange, speedValue, onSpeedChange, focusValue, onFocusChange, cinematicIntensity, onCinematicIntensityChange, bokehQuality, onBokehChange, reverseMode, onReverseChange, smoothMode, onSmoothChange, loopMode, onLoopChange)
             }
 
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(BorderDark))
@@ -581,21 +722,27 @@ private fun WorkspaceSettingsArea(
                     Text("🔥", fontSize = 14.sp)
                     Text("Cost Estimation", color = TextMuted, fontSize = 13.sp)
                 }
-                Text("$calculatedCost Credits", color = NeonPurple, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    if (unlimited) "Free (Happy Hour)" else "$calculatedCost Credits",
+                    color = NeonPurple, fontSize = 14.sp, fontWeight = FontWeight.Bold
+                )
             }
 
             GlassmorphicButton(
-                text = if (isGenerating) "Generating..." else "Generate 3D Image",
+                text = if (isGenerating) "Generating..." else if (unlimited) "Generate 3D Image (Unlimited)" else "Generate 3D Image",
                 icon = Icons.Default.AutoAwesome,
                 onClick = {
-                    if (userCredits < calculatedCost) {
+                    if (!unlimited && userCredits < calculatedCost) {
                         showInsufficientCreditsModal = true
                     } else {
                         onGenerateClick()
                     }
                 },
                 enabled = !isGenerating,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer { alpha = if (isStaticButtonVisible) 1f else 0f }
+                    .onGloballyPositioned { onButtonPositioned(it) }
             )
         }
     }
@@ -620,7 +767,7 @@ private fun BasicSettingsContent(
             AdvancedSliderRow(
                 label = "Motion Amplitude",
                 value = depthIntensity,
-                range = 0.1f..1.5f,
+                range = 0.1f..3.0f,
                 onValueChange = onIntensityChange,
                 valueDisplay = String.format("%.1f", depthIntensity)
             )
@@ -628,7 +775,7 @@ private fun BasicSettingsContent(
             AdvancedSliderRow(
                 label = "Motion Speed",
                 value = speedValue,
-                range = 0.5f..3f,
+                range = 0.1f..3.0f,
                 onValueChange = onSpeedChange,
                 valueDisplay = "${speedValue.toInt()}x"
             )
@@ -636,7 +783,7 @@ private fun BasicSettingsContent(
             AdvancedSliderRow(
                 label = "Video Length",
                 value = lengthValue,
-                range = 3f..30f,
+                range = 1f..15f,
                 onValueChange = onLengthChange,
                 valueDisplay = "${lengthValue.toInt()}s"
             )
@@ -646,11 +793,11 @@ private fun BasicSettingsContent(
         SettingsSection(title = "Camera Motion") {
             val motions = listOf(
                 Triple("Dolly", Icons.Default.OpenWith, "Dolly"),
-                Triple("Orbit", Icons.Default.Sync, "Circular Orbit"),
-                Triple("Zoom", Icons.Default.ZoomIn, "Zoom In"),
-                Triple("Horizontal", Icons.Default.CompareArrows, "Horizontal Pan"),
-                Triple("Vertical", Icons.Default.Height, "Vertical Pan"),
-                Triple("Circle", Icons.Default.ChangeHistory, "Wave / Sway")
+                Triple("Orbit", Icons.Default.Sync, "Orbit"),
+                Triple("Zoom", Icons.Default.ZoomIn, "Zoom"),
+                Triple("Horizontal", Icons.AutoMirrored.Filled.CompareArrows, "Horizontal"),
+                Triple("Vertical", Icons.Default.Height, "Vertical"),
+                Triple("Circle", Icons.Default.ChangeHistory, "Circle")
             )
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -686,33 +833,38 @@ private fun AdvancedSettingsContent(
     lengthValue: Float, onLengthChange: (Float) -> Unit,
     ssaaValue: String, onSsaaChange: (String) -> Unit,
     fpsValue: String, onFpsChange: (String) -> Unit,
-    cameraStyle: String, onStyleChange: (String) -> Unit,
-    motionMode: String, onModeChange: (String) -> Unit,
+    motionPath: String, onMotionPathChange: (String) -> Unit,
     speedValue: Float, onSpeedChange: (Float) -> Unit,
     focusValue: Float, onFocusChange: (Float) -> Unit,
     cinematicIntensity: Float, onCinematicIntensityChange: (Float) -> Unit,
-    bokehQuality: String, onBokehChange: (String) -> Unit
+    bokehQuality: String, onBokehChange: (String) -> Unit,
+    reverseMode: Boolean, onReverseChange: (Boolean) -> Unit,
+    smoothMode: Boolean, onSmoothChange: (Boolean) -> Unit,
+    loopMode: Boolean, onLoopChange: (Boolean) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
 
         // --- Render Section ---
         SettingsSection(title = "Render") {
-            AdvancedSliderRow("Duration", lengthValue, 3f..30f, onLengthChange, "${lengthValue.toInt()}s")
-            SettingsDropdown("SSAA", ssaaValue, listOf("1.0x", "2.0x", "4.0x"), onSsaaChange)
+            AdvancedSliderRow("Duration", lengthValue, 1f..30f, onLengthChange, "${lengthValue.toInt()}s")
+            SettingsDropdown("SSAA", ssaaValue, listOf("1.0x", "1.5x", "2.0x"), onSsaaChange)
             SettingsDropdown("FPS", fpsValue, listOf("24p", "30p", "60p"), onFpsChange)
         }
 
         // --- Camera & Motions Section ---
         SettingsSection(title = "Camera & Motions") {
-            SettingsDropdown("Style", cameraStyle, listOf("Dolly", "Orbit", "Zoom", "Pan"), onStyleChange)
+            SettingsDropdown("Style", motionPath, listOf("Dolly", "Orbit", "Zoom", "Horizontal", "Vertical", "Circle", "Dolly Zoom"), onMotionPathChange)
 
             // Motion Mode Buttons (Reverse, Smooth, Loop)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf("Reverse", "Smooth", "Loop").forEach { mode ->
-                    val isSelected = motionMode == mode
+                listOf(
+                    Triple("Reverse", reverseMode, onReverseChange),
+                    Triple("Smooth", smoothMode, onSmoothChange),
+                    Triple("Loop", loopMode, onLoopChange)
+                ).forEach { (label, isSelected, onToggle) ->
                     Box(
                         modifier = Modifier
                             .weight(1f)
@@ -720,22 +872,22 @@ private fun AdvancedSettingsContent(
                             .clip(RoundedCornerShape(10.dp))
                             .background(if (isSelected) NeonPurple else Color(0xFF16162C))
                             .border(1.dp, if (isSelected) NeonPurple else BorderDark, RoundedCornerShape(10.dp))
-                            .clickable { onModeChange(mode) },
+                            .clickable { onToggle(!isSelected) },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(mode, color = if (isSelected) Color.White else TextMuted, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(label, color = if (isSelected) Color.White else TextMuted, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             }
 
-            AdvancedSliderRow("Speed", speedValue, 0.1f..5f, onSpeedChange, speedValue.toInt().toString())
-            AdvancedSliderRow("Focus", focusValue, -10f..10f, onFocusChange, focusValue.toInt().toString())
+            AdvancedSliderRow("Speed", speedValue, 0.5f..3f, onSpeedChange, String.format("%.1fx", speedValue))
+            AdvancedSliderRow("Focus", focusValue, 0f..1f, onFocusChange, String.format("%.2f", focusValue))
         }
 
         // --- Cinematic Effects Section ---
         SettingsSection(title = "Cinematic Effects") {
-            AdvancedSliderRow("Intensity", cinematicIntensity, 0f..2f, onCinematicIntensityChange, cinematicIntensity.toInt().toString())
-            SettingsDropdown("Bokeh Quality", bokehQuality, listOf("Low (50)", "Medium (100)", "High (200)"), onBokehChange)
+            AdvancedSliderRow("Intensity", cinematicIntensity, 0f..2f, onCinematicIntensityChange, String.format("%.1f", cinematicIntensity))
+            SettingsDropdown("Bokeh Quality", bokehQuality, listOf("Low (50)", "Medium (80)", "High (100)"), onBokehChange)
         }
     }
 }

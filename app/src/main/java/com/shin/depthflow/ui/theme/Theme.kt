@@ -41,11 +41,8 @@ fun DepthflowTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            // Make the system status bar match the app background
-            window.statusBarColor = BackgroundDark.toArgb()
-            window.navigationBarColor = BackgroundDark.toArgb()
-
-            // Ensure status bar icons (time, battery) are light/visible
+            // Standard edge-to-edge handling is now managed in MainActivity via enableEdgeToEdge()
+            // Android 15 (SDK 35+) automatically handles bar colors and icon appearance.
             WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
             WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = false
         }

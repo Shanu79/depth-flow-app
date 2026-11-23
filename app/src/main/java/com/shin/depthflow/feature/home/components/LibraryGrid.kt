@@ -108,19 +108,6 @@ fun VideoListSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(text = title, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 18.sp)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.clickable { }
-            ) {
-                Text(text = "See All", color = Color(0xFF9E65FF), fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                Spacer(modifier = Modifier.width(2.dp))
-                Icon(
-                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                    contentDescription = "See All",
-                    tint = Color(0xFF9E65FF),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
         }
 
         LazyRow(

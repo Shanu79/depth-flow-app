@@ -65,7 +65,7 @@ interface DepthFlowApiService {
         @Part("request_source") source: RequestBody
     ): Response<ResponseBody>
 
-    @POST("ai/depthflow/verify-purchase")
+    @POST("payments/verify-purchase")
     suspend fun verifyPurchase(
         @Header("Authorization") token: String,
         @Body request: PurchaseVerificationRequest
@@ -97,6 +97,76 @@ interface DepthFlowApiService {
         @Header("Authorization") token: String,
         @Body request: ChangePasswordRequest
     ): Response<Unit>
+
+    // --- Admin-managed content: home popup, offer banner, What's New ---
+    @GET("popups/eligible")
+    suspend fun getEligiblePopups(
+        @Header("Authorization") token: String,
+        @Query("limit") limit: Int = 1
+    ): PopupsResponse
+
+    @POST("popups/{id}/track")
+    suspend fun trackPopup(
+        @Header("Authorization") token: String,
+        @Path("id") id: Int
+    ): TrackResponse
+
+    @GET("offer-banner/active")
+    suspend fun getActiveBanner(): BannerResponse
+
+    @GET("whats-new")
+    suspend fun getWhatsNew(): WhatsNewResponse
+
+    // --- Happy Hour ---
+    @GET("happy-hour/status")
+    suspend fun getHappyHourStatus(@Header("Authorization") token: String): HappyHourStatus
+
+    @POST("happy-hour/activate")
+    suspend fun activateHappyHour(
+        @Header("Authorization") token: String,
+        @Header("Idempotency-Key") idempotencyKey: String
+    ): HappyHourStatus
+
+    @GET("happy-hour/history")
+    suspend fun getHappyHourHistory(
+        @Header("Authorization") token: String,
+        @Query("limit") limit: Int = 50
+    ): List<HappyHourSession>
+
+    // --- Notification inbox ---
+    @GET("notifications")
+    suspend fun getNotifications(
+        @Header("Authorization") token: String,
+        @Query("limit") limit: Int = 20,
+        @Query("after_id") afterId: Long? = null,
+        @Query("before_id") beforeId: Long? = null,
+        @Query("unread_only") unreadOnly: Boolean = false
+    ): InboxResponse
+
+    @GET("notifications/unread-count")
+    suspend fun getUnreadCount(@Header("Authorization") token: String): UnreadCountResponse
+
+    @POST("notifications/{id}/read")
+    suspend fun markNotificationRead(
+        @Header("Authorization") token: String,
+        @Path("id") id: Long
+    ): ReadResponse
+
+    @POST("notifications/read-all")
+    suspend fun markAllNotificationsRead(@Header("Authorization") token: String): ReadResponse
+
+    // --- Push device registration ---
+    @POST("notifications/devices")
+    suspend fun registerDevice(
+        @Header("Authorization") token: String,
+        @Body request: DeviceRequest
+    ): DeviceStatusResponse
+
+    @POST("notifications/devices/unregister")
+    suspend fun unregisterDevice(
+        @Header("Authorization") token: String,
+        @Body request: DeviceUnregisterRequest
+    ): DeviceStatusResponse
 }
 
 // Data Classes matching your Python schemas.py

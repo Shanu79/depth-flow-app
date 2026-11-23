@@ -45,6 +45,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.automirrored.outlined.ExitToApp
 import androidx.compose.material.icons.outlined.CreditCard
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.QuestionAnswer
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
@@ -107,7 +108,8 @@ fun ProfileScreen(
     onNavigateToFAQ: () -> Unit,
     onNavigateToMyProjects: () -> Unit,
     onNavigateToEditProfile: () -> Unit,
-    onNavigateToPricing: () -> Unit
+    onNavigateToPricing: () -> Unit,
+    onOpenWhatsNew: () -> Unit = {}
 ) {
     val isLoading by viewModel.isProfileLoading.collectAsState()
     val isNetworkAvailable by viewModel.isNetworkAvailable.collectAsState()
@@ -159,7 +161,8 @@ fun ProfileScreen(
                 onNavigateToContactUs = onNavigateToContactUs,
                 onNavigateToBilling = onNavigateToBilling,
                 onNavigateToFAQ = onNavigateToFAQ,
-                onNavigateToMyProjects = onNavigateToMyProjects
+                onNavigateToMyProjects = onNavigateToMyProjects,
+                onOpenWhatsNew = onOpenWhatsNew
             )
 
             UpgradeBannerCard(onClick = onNavigateToPricing)
@@ -340,7 +343,9 @@ fun PlanCard(
             )
             // Column of texts from screenshot
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                val isCancelled = subStatus.contains("Scheduled for cancellation", ignoreCase = true)
+                val isCancelled = subStatus.contains("Scheduled for cancellation", ignoreCase = true) || 
+                                 subStatus.contains("canceled", ignoreCase = true) || 
+                                 subStatus.contains("cancelled", ignoreCase = true)
                 
                 Text(text = "Current Plan", color = TextMuted, fontSize = 12.sp)
                 Text(
@@ -354,6 +359,8 @@ fun PlanCard(
                     val label = if (isCancelled) "Ends on " else "Renews on "
                     val dateColor = if (isCancelled) Color(0xFFF39C12) else Color(0xFF00C853)
                     Text(text = "$label$renewalDate", color = dateColor, fontSize = 12.sp)
+                } else if (subStatus.lowercase().contains("active")) {
+                    Text(text = "Subscription Active", color = Color(0xFF00C853), fontSize = 12.sp)
                 } else {
                     Text(text = "Subscription Inactive", color = WarningRed, fontSize = 12.sp)
                 }
@@ -383,7 +390,8 @@ fun ActionMenu(
     onNavigateToContactUs: () -> Unit,
     onNavigateToBilling: () -> Unit,
     onNavigateToFAQ: () -> Unit,
-    onNavigateToMyProjects: () -> Unit
+    onNavigateToMyProjects: () -> Unit,
+    onOpenWhatsNew: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -394,6 +402,7 @@ fun ActionMenu(
             MenuOption("My Projects", "View and manage your projects", Icons.Outlined.Folder, onNavigateToMyProjects),
             MenuOption("Billing & Payments", "Manage your subscriptions and invoices", Icons.Outlined.CreditCard, onNavigateToBilling),
             MenuOption("FAQs", "View FAQs and get answers to most asked questions", Icons.Outlined.QuestionAnswer, onNavigateToFAQ),
+            MenuOption("What's New", "See the latest features and updates", Icons.Outlined.AutoAwesome, onOpenWhatsNew),
             MenuOption("Help & Support", "Get help and support", Icons.AutoMirrored.Outlined.HelpOutline, onNavigateToContactUs),
             MenuOption("Logout", null, Icons.AutoMirrored.Outlined.ExitToApp, onLogout)
         )

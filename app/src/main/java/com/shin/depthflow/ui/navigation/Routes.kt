@@ -14,11 +14,12 @@ object Routes {
     const val REGISTER = "register"
     const val VERIFY_OTP = "verify_otp"
     const val RESET_PASSWORD = "reset_password"
+    const val EXPLORE_LIBRARY = "explore_library"
+    const val HAPPY_HOUR = "happy_hour"
+    const val NOTIFICATIONS = "notifications"
+
+    // What's New detail page, opened from a banner in Notifications.
+    const val WHATS_NEW_ARG = "releaseId"
+    const val WHATS_NEW_DETAIL = "whats_new/{$WHATS_NEW_ARG}"
+    fun whatsNewDetail(releaseId: Int) = "whats_new/$releaseId"
 }
-
-
-
-
-
-
-

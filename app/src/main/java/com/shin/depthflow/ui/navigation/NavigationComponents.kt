@@ -88,10 +88,18 @@ fun DepthFlowBottomNavigation(
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
             // Left side items
+            // Notifications (top-bar bell) and Happy Hour (banner on Home and Workspace, or a push) are
+            // reachable from several tabs, so no tab is highlighted there. DepthFlowApp's
+            // isTargetSectionCurrent still treats them as Home for the "tap Home returns to Home root"
+            // behaviour; that difference is intentional.
+            val isHomeSection = currentRoute == Routes.HOME ||
+                               currentRoute.startsWith(Routes.EXPLORE_LIBRARY) ||
+                               currentRoute in listOf(Routes.REGISTER, Routes.VERIFY_OTP, Routes.RESET_PASSWORD)
+            
             BottomNavItem(
                 label = "Home",
                 icon = Icons.Default.Home,
-                isSelected = currentRoute == Routes.HOME,
+                isSelected = isHomeSection,
                 onSelect = { onNavigate(Routes.HOME) },
                 modifier = Modifier.weight(1f)
             )
@@ -173,10 +181,20 @@ fun DepthFlowBottomNavigation(
                 onSelect = { onNavigate(Routes.PRICING) },
                 modifier = Modifier.weight(1f)
             )
+            
+            val isProfileSection = currentRoute in listOf(
+                Routes.PROFILE, 
+                Routes.EDIT_PROFILE, 
+                Routes.MY_PROJECTS, 
+                Routes.BILLING, 
+                Routes.FAQ, 
+                Routes.CONTACT_US
+            )
+            
             BottomNavItem(
                 label = "Profile",
                 icon = Icons.Default.Person,
-                isSelected = currentRoute == Routes.PROFILE,
+                isSelected = isProfileSection,
                 onSelect = { onNavigate(Routes.PROFILE) },
                 modifier = Modifier.weight(1f)
             )

@@ -16,6 +16,8 @@ object NotificationHelper {
     private const val CHANNEL_DESC = "Notifications for downloaded 3D videos"
 
     fun createNotificationChannel(context: Context) {
+        com.shin.depthflow.push.PushNotifications.createChannel(context)
+        GenerationNotifier.createChannels(context)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val importance = NotificationManager.IMPORTANCE_DEFAULT
             val channel = NotificationChannel(CHANNEL_ID, CHANNEL_NAME, importance).apply {

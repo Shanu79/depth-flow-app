@@ -23,6 +23,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.NavController
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.shin.depthflow.feature.billing.BillingScreen
@@ -44,8 +45,23 @@ import com.shin.depthflow.ui.navigation.DepthFlowTopBar
 import com.shin.depthflow.ui.navigation.Routes
 import com.shin.depthflow.ui.theme.Surface
 import com.shin.depthflow.viewmodel.DepthFlowViewModel
+import com.shin.depthflow.viewmodel.HappyHourEvent
+import com.shin.depthflow.push.PushEvents
+import com.shin.depthflow.push.PushTarget
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import com.shin.depthflow.viewmodel.HappyHourViewModel
+import com.shin.depthflow.viewmodel.ContentViewModel
+import com.shin.depthflow.ui.promo.PromoOverlays
+import com.shin.depthflow.feature.notifications.WhatsNewDetailScreen
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import com.shin.depthflow.feature.happyhour.HappyHourScreen
+import com.shin.depthflow.feature.notifications.NotificationsScreen
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
+import com.google.firebase.analytics.FirebaseAnalytics
+import android.os.Bundle
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
 import java.util.UUID
@@ -54,6 +70,11 @@ import java.util.UUID
 @Composable
 fun DepthFlowApp(
     viewModel: DepthFlowViewModel,
+    happyHourViewModel: HappyHourViewModel,
+    contentViewModel: ContentViewModel,
+    // A tapped push to open (route "happy_hour"). Consumed through onPushHandled.
+    pendingPush: PushTarget? = null,
+    onPushHandled: () -> Unit = {},
     // Callback to pass billing intents from the Pricing UI back to MainActivity
     onInitiatePurchase: (planId: String, isYearly: Boolean) -> Unit = {_, _ -> },
     // Inject the initial start destination from MainActivity
@@ -68,6 +89,36 @@ fun DepthFlowApp(
     // Observe the global credits from the ViewModel to feed into the TopBar
     val currentCredits by viewModel.credits.collectAsState()
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
+
+    // Happy Hour follows the login state: fetch on login, clear on logout.
+    val authToken by viewModel.authToken.collectAsState()
+    val inboxUnread by happyHourViewModel.unreadCount.collectAsState()
+    val hasUnseenWhatsNew by contentViewModel.hasUnseenWhatsNew.collectAsState()
+    // The bell badge also counts a What's New announcement the user has not opened yet.
+    val unreadCount = inboxUnread + if (hasUnseenWhatsNew) 1 else 0
+    LaunchedEffect(authToken) { happyHourViewModel.onAuthChanged(authToken) }
+    // Happy Hour tokens are granted inside purchase verification: refetch right after it.
+    LaunchedEffect(Unit) {
+        viewModel.purchaseVerified.collect { happyHourViewModel.refresh() }
+    }
+    val appContext = LocalContext.current
+    // A push arrived while the app is open: refetch the authoritative state and the badge.
+    LaunchedEffect(Unit) {
+        PushEvents.received.collect {
+            happyHourViewModel.refresh()
+            happyHourViewModel.refreshUnreadCount()
+        }
+    }
+    LaunchedEffect(Unit) {
+        happyHourViewModel.events.collect { event ->
+            when (event) {
+                is HappyHourEvent.Message ->
+                    Toast.makeText(appContext, event.text, Toast.LENGTH_LONG).show()
+                // Any 401 means the session is gone: log out (routes then redirect to login/home).
+                HappyHourEvent.Unauthorized -> viewModel.logout()
+            }
+        }
+    }
 
     // State for the central Plus Button Modal
     var showPlusOverlay by remember { mutableStateOf(false) }
@@ -85,13 +136,70 @@ fun DepthFlowApp(
         Routes.EDIT_PROFILE,
         Routes.REGISTER,
         Routes.VERIFY_OTP,
-        Routes.RESET_PASSWORD
+        Routes.RESET_PASSWORD,
+        Routes.HAPPY_HOUR,
+        Routes.NOTIFICATIONS,
+        Routes.WHATS_NEW_DETAIL
     )
 
     val hazeState = remember { HazeState() }
 
     val showTopBar = currentRoute !in routesWithoutTopBar
 
+    val context = LocalContext.current
+    DisposableEffect(navController) {
+        val listener = NavController.OnDestinationChangedListener { _, destination, _ ->
+            try {
+                val params = Bundle().apply {
+                    putString(FirebaseAnalytics.Param.SCREEN_NAME, destination.route)
+                    putString(FirebaseAnalytics.Param.SCREEN_CLASS, destination.route)
+                }
+                FirebaseAnalytics.getInstance(context).logEvent(FirebaseAnalytics.Event.SCREEN_VIEW, params)
+            } catch (e: Exception) {
+                Log.e("DepthFlowApp", "Failed to log screen view: ${e.message}")
+            }
+        }
+        navController.addOnDestinationChangedListener(listener)
+        onDispose {
+            navController.removeOnDestinationChangedListener(listener)
+        }
+    }
+
+    // Open the screen a tapped push points to. The session is restored asynchronously on a cold
+    // start, so wait briefly for the login state before giving up (e.g. user is logged out).
+    LaunchedEffect(pendingPush) {
+        val target = pendingPush ?: return@LaunchedEffect
+        val loggedIn = withTimeoutOrNull(5000) { snapshotFlow { isLoggedIn }.first { it } } == true
+        if (loggedIn && target.route == "happy_hour") {
+            navController.navigate(Routes.HAPPY_HOUR) { launchSingleTop = true }
+            target.notificationId?.let { happyHourViewModel.markRead(it) }
+        } else if (loggedIn && target.route == PushTarget.ROUTE_WORKSPACE) {
+            // Tapped a 3D-generation notification: open Workspace like a tab switch.
+            navController.navigate(Routes.WORKSPACE) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+        onPushHandled()
+    }
+
+    // Admin-managed overlays: What's New first, then the home popup (Home only). Links such as
+    // "/pricing" from the web app are mapped to this app's screens; unknown paths just close.
+    PromoOverlays(
+        viewModel = contentViewModel,
+        bearer = authToken?.takeIf { it.isNotEmpty() }?.let { "Bearer $it" },
+        onHome = currentRoute == Routes.HOME,
+        onInAppPath = { path ->
+            when (path.substringBefore('?').trimEnd('/')) {
+                "/pricing" -> navController.navigate(Routes.PRICING) { launchSingleTop = true }
+                "/happy-hour" -> if (isLoggedIn) {
+                    navController.navigate(Routes.HAPPY_HOUR) { launchSingleTop = true }
+                }
+                else -> Unit
+            }
+        }
+    )
 
     Scaffold(
         containerColor = Color.Transparent, // MUST be transparent for Box background to be sampled
@@ -102,7 +210,9 @@ fun DepthFlowApp(
                     isLoggedIn = isLoggedIn,
                     onLoginClick = {
                         navController.navigate(Routes.LOGIN)
-                    }
+                    },
+                    unreadCount = unreadCount,
+                    onNotificationsClick = { navController.navigate(Routes.NOTIFICATIONS) }
                 )
             }
         },
@@ -111,6 +221,7 @@ fun DepthFlowApp(
                 // 2. The floating styling and system bar protection are applied directly here
                 DepthFlowBottomNavigation(
                     modifier = Modifier
+                        .windowInsetsPadding(WindowInsets.navigationBars)
                         .fillMaxWidth(),
                     hazeState = hazeState,
                     isModalOpen = showPlusOverlay,
@@ -121,8 +232,25 @@ fun DepthFlowApp(
                             navController.navigate(Routes.LOGIN)
                         } else {
                             navController.navigate(route) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+                                // Unified Root-Return Logic for all sections
+                                val isTargetSectionCurrent = when(route) {
+                                    Routes.HOME -> currentRoute == Routes.HOME || 
+                                                  currentRoute.startsWith(Routes.EXPLORE_LIBRARY) ||
+                                                  currentRoute in listOf(Routes.REGISTER, Routes.VERIFY_OTP, Routes.RESET_PASSWORD, Routes.HAPPY_HOUR, Routes.NOTIFICATIONS, Routes.WHATS_NEW_DETAIL)
+                                    Routes.PROFILE -> currentRoute in listOf(Routes.PROFILE, Routes.EDIT_PROFILE, Routes.MY_PROJECTS, Routes.BILLING, Routes.FAQ, Routes.CONTACT_US)
+                                    Routes.WORKSPACE -> currentRoute == Routes.WORKSPACE
+                                    Routes.PRICING -> currentRoute == Routes.PRICING
+                                    else -> false
+                                }
+
+                                if (isTargetSectionCurrent) {
+                                    // If already in the section, pop back to the root of that section
+                                    popUpTo(route) { inclusive = false }
+                                } else {
+                                    // If switching sections, standard behavior
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
                                 }
                                 launchSingleTop = true
                                 restoreState = true
@@ -292,7 +420,13 @@ fun DepthFlowApp(
                 }
 
                 composable(Routes.HOME) {
+                    val isLoggedIn by viewModel.isLoggedIn.collectAsState()
                     DepthFlowHomeScreen(
+                        happyHourViewModel = happyHourViewModel,
+                        onNavigateToHappyHour = {
+                            if (isLoggedIn) navController.navigate(Routes.HAPPY_HOUR)
+                            else navController.navigate(Routes.LOGIN)
+                        },
                         onNavigateToWorkspace = {
                             if(isLoggedIn) {
                                 navController.navigate(Routes.WORKSPACE) {
@@ -323,8 +457,9 @@ fun DepthFlowApp(
                     } else {
                         WorkspaceScreen(
                             viewModel = viewModel,
-                            navController,
-                            currentCredits
+                            navController = navController,
+                            userCredits = currentCredits,
+                            happyHourViewModel = happyHourViewModel
                         )
                     }
                 }
@@ -332,6 +467,7 @@ fun DepthFlowApp(
                 composable(Routes.PRICING) {
                     PricingScreen(
                         viewModel = viewModel,
+                        contentViewModel = contentViewModel,
                         onNavigateToLogin = { navController.navigate(Routes.LOGIN) },
                         onInitiatePurchase = onInitiatePurchase
                     )
@@ -376,7 +512,8 @@ fun DepthFlowApp(
                             },
                             onNavigateToPricing = {
                                 navController.navigate(Routes.PRICING)
-                            }
+                            },
+                            onOpenWhatsNew = { navController.navigate(Routes.NOTIFICATIONS) }
                         )
                     }
                 }
@@ -413,6 +550,49 @@ fun DepthFlowApp(
                     )
                 }
 
+                composable(Routes.HAPPY_HOUR) {
+                    HappyHourScreen(
+                        viewModel = happyHourViewModel,
+                        onBack = { navController.popBackStack() },
+                        onNavigateToPricing = { navController.navigate(Routes.PRICING) },
+                        onNavigateToWorkspace = {
+                            navController.navigate(Routes.WORKSPACE) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                    )
+                }
+
+                composable(Routes.NOTIFICATIONS) {
+                    NotificationsScreen(
+                        viewModel = happyHourViewModel,
+                        contentViewModel = contentViewModel,
+                        onBack = { navController.popBackStack() },
+                        onOpenWhatsNew = { id -> navController.navigate(Routes.whatsNewDetail(id)) },
+                        onOpenHappyHour = { navController.navigate(Routes.HAPPY_HOUR) }
+                    )
+                }
+
+                composable(
+                    route = Routes.WHATS_NEW_DETAIL,
+                    arguments = listOf(navArgument(Routes.WHATS_NEW_ARG) { type = NavType.IntType })
+                ) { entry ->
+                    WhatsNewDetailScreen(
+                        releaseId = entry.arguments?.getInt(Routes.WHATS_NEW_ARG) ?: -1,
+                        contentViewModel = contentViewModel,
+                        onBack = { navController.popBackStack() },
+                        onInAppPath = { path ->
+                            when (path.substringBefore('?').trimEnd('/')) {
+                                "/pricing" -> navController.navigate(Routes.PRICING) { launchSingleTop = true }
+                                "/happy-hour" -> navController.navigate(Routes.HAPPY_HOUR) { launchSingleTop = true }
+                                else -> navController.popBackStack()
+                            }
+                        }
+                    )
+                }
+
                 composable(Routes.FAQ) {
                     FAQScreen(
                         onBack = { navController.popBackStack() },
@@ -443,11 +623,7 @@ fun DepthFlowApp(
                         // TELL THE VIEWMODEL WHICH TAB TO OPEN
                         viewModel.setActiveSettingsTab(mode)
 
-                        if (mode == "Basic") {
-                            viewModel.setMotionPath("Circular Orbit")
-                        } else {
-                            viewModel.setMotionPath("Wave / Sway")
-                        }
+                        viewModel.setMotionPath("Dolly")
 
                         navController.navigate(Routes.WORKSPACE) {
                             popUpTo(navController.graph.findStartDestination().id) {

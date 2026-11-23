@@ -4,6 +4,15 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    alias(libs.plugins.google.services)
+    alias(libs.plugins.firebase.crashlytics)
+}
+
+val PROD_BASE_URL = "https://api.depthflow.io/"
+
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
 }
 
 android {
@@ -24,26 +33,28 @@ android {
         applicationId = "com.shin.depthflow"
         minSdk = 30
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.05"
+        versionCode = 10
+        versionName = "1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // 1. Explicitly load local.properties
-        val properties = Properties()
-        val localPropertiesFile = project.rootProject.file("local.properties")
-        if (localPropertiesFile.exists()) {
-            properties.load(localPropertiesFile.inputStream())
-        }
-
-        // 2. Read the ID, clean up any accidental quotes, and inject it
-        val rawClientId = properties.getProperty("GOOGLE_WEB_CLIENT_ID") ?: ""
-        val cleanClientId = rawClientId.removePrefix("\"").removeSuffix("\"")
-
+        val cleanClientId = (localProps.getProperty("GOOGLE_WEB_CLIENT_ID") ?: "")
+            .removePrefix("\"").removeSuffix("\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$cleanClientId\"")
+        buildConfigField("String", "BASE_URL", "\"$PROD_BASE_URL\"")
     }
 
     buildTypes {
+        debug {
+            // Debug may point at a local backend via API_BASE_URL in local.properties
+            // (e.g. http://10.0.2.2:8000/ for the emulator). Release always uses prod.
+            val override = (localProps.getProperty("API_BASE_URL") ?: "").trim()
+                .removePrefix("\"").removeSuffix("\"")
+                .let { if (it.isNotEmpty() && !it.endsWith("/")) "$it/" else it }
+            if (override.isNotEmpty()) {
+                buildConfigField("String", "BASE_URL", "\"$override\"")
+            }
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -71,6 +82,7 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.foundation.layout)
+    implementation(libs.androidx.compose.material.core)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui.text)
     implementation(libs.androidx.ui)
@@ -167,4 +179,10 @@ dependencies {
 
     // For blur effects:
     implementation(libs.haze)
+
+    // Firebase
+    implementation(platform(libs.firebase.bom.v34150))
+    implementation(libs.google.firebase.analytics)
+    implementation(libs.firebase.crashlytics)
+    implementation(libs.firebase.messaging) // FCM push (Happy Hour notifications)
 }

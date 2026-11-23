@@ -24,6 +24,13 @@ import androidx.compose.ui.unit.sp
 import com.shin.depthflow.feature.home.components.outerGlow
 import com.shin.depthflow.feature.profile.shimmerEffect
 import com.shin.depthflow.viewmodel.DepthFlowViewModel
+import com.shin.depthflow.viewmodel.ContentViewModel
+import com.shin.depthflow.ui.promo.LinkRouter
+import com.shin.depthflow.ui.promo.OfferBanner
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import com.shin.depthflow.ui.components.PricingButton
@@ -41,6 +48,7 @@ private val TextMuted = Color(0xFFBBB8CF)
 @Composable
 fun PricingScreen(
     viewModel: DepthFlowViewModel, // Added viewModel
+    contentViewModel: ContentViewModel? = null,
     onNavigateToLogin: () -> Unit, // Added callback for login navigation
     // ADDED: Callback to trigger the purchase flow in MainActivity
     onInitiatePurchase: (planId: String, isYearly: Boolean) -> Unit = { _, _ -> }
@@ -49,6 +57,19 @@ fun PricingScreen(
     val isProfileLoading by viewModel.isProfileLoading.collectAsState()
     val currentPlan by viewModel.userPlan.collectAsState()
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
+
+    // Offer banner: refetch on every visit and on resume (no tracking, no caching beyond that).
+    val context = LocalContext.current
+    val banner by (contentViewModel?.banner ?: remember { kotlinx.coroutines.flow.MutableStateFlow(null) })
+        .collectAsState()
+    DisposableEffect(contentViewModel, context) {
+        val owner = context as? LifecycleOwner
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) contentViewModel?.refreshBanner()
+        }
+        owner?.lifecycle?.addObserver(observer)
+        onDispose { owner?.lifecycle?.removeObserver(observer) }
+    }
 
     Column(
         modifier = Modifier
@@ -59,6 +80,18 @@ fun PricingScreen(
             .padding(bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
+        // Admin-managed offer banner. Nothing is composed (so no gap) when there is none.
+        banner?.let { item ->
+            OfferBanner(
+                item = item,
+                skewMillis = contentViewModel?.skewMillis ?: 0L,
+                onCta = {
+                    // Already on Pricing: an in-app "/pricing" link needs no action.
+                    LinkRouter.handle(context, item.button_link) { }
+                }
+            )
+        }
+
         // Header UI is here...
         Column(
             modifier = Modifier.fillMaxWidth(),

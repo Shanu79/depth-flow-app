@@ -55,6 +55,8 @@ import com.shin.depthflow.viewmodel.DepthFlowViewModel
 
 @Composable
 fun DepthFlowHomeScreen(
+    happyHourViewModel: com.shin.depthflow.viewmodel.HappyHourViewModel,
+    onNavigateToHappyHour: () -> Unit,
     onNavigateToWorkspace: () -> Unit,
     onNavigateToPricing: () -> Unit,
     viewModel: DepthFlowViewModel = viewModel()
@@ -67,6 +69,13 @@ fun DepthFlowHomeScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                item {
+                    // Only renders when a session is live or can be started
+                    com.shin.depthflow.feature.happyhour.HappyHourBanner(
+                        viewModel = happyHourViewModel,
+                        onOpen = onNavigateToHappyHour
+                    )
+                }
                 item { HeroActionSection(onNavigateToWorkspace) }
                 item { FeatureCardsSection() }
                 item {

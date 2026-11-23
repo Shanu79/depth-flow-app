@@ -8,6 +8,9 @@ coreKtx = "1.10.1"
 credentials = "1.6.0"
 credentialsPlayServicesAuth = "1.6.0"
 datastorePreferences = "1.2.1"
+firebaseBomVersion = "34.15.0"
+google-services-plugin = "4.4.2"
+firebase-crashlytics-plugin = "3.0.3"
 googleid = "1.2.0"
 haze = "1.7.2"
 hazeBlur = "<version>"
@@ -46,6 +49,8 @@ foundationLayout = "1.11.2"
 material3 = "1.4.0"
 uiText = "1.11.2"
 composeMaterial3 = "1.6.2"
+composeMaterialCore = "1.6.2"
+firebaseBom = "34.10.0"
 
 
 
@@ -67,6 +72,10 @@ androidx-navigation-runtime-ktx = { module = "androidx.navigation:navigation-run
 billing-ktx = { module = "com.android.billingclient:billing-ktx", version.ref = "billingKtx" }
 coil-compose-v260 = { module = "io.coil-kt:coil-compose", version.ref = "coilCompose" }
 coil-video = { module = "io.coil-kt:coil-video", version.ref = "coilVideo" }
+firebase-bom-v34150 = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBomVersion" }
+google-firebase-analytics = { module = "com.google.firebase:firebase-analytics" }
+firebase-crashlytics = { module = "com.google.firebase:firebase-crashlytics" }
+firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 googleid = { module = "com.google.android.libraries.identity.googleid:googleid", version.ref = "googleid" }
 haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 haze-blur = { module = "dev.chrisbanes.haze:haze-blur", version.ref = "hazeBlur" }
@@ -115,8 +124,13 @@ androidx-compose-foundation-layout = { group = "androidx.compose.foundation", na
 material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
 androidx-compose-ui-text = { group = "androidx.compose.ui", name = "ui-text", version.ref = "uiText" }
 compose-material3 = { group = "androidx.wear.compose", name = "compose-material3", version.ref = "composeMaterial3" }
+androidx-compose-material-core = { group = "androidx.wear.compose", name = "compose-material-core", version.ref = "composeMaterialCore" }
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+google-services = { id = "com.google.gms.google-services", version.ref = "google-services-plugin" }
+firebase-crashlytics = { id = "com.google.firebase.crashlytics", version.ref = "firebase-crashlytics-plugin" }

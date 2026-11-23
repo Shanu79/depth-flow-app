@@ -22,11 +22,10 @@
     <string name="default_user_name">DepthFlow User</string>
 
     <!-- UI Defaults -->
-    <string name="default_motion_path">Circular Orbit</string>
+    <string name="default_motion_path">Dolly</string>
     <string name="default_settings_tab">Basic</string>
     <string name="default_ssaa">1.0x</string>
     <string name="default_fps">30p</string>
-    <string name="default_camera_style">Dolly</string>
     <string name="default_bokeh_quality">Low (50)</string>
     <string name="default_motion_mode">Loop</string>
 </resources>

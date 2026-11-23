@@ -1,5 +1,8 @@
 package com.shin.depthflow.viewmodel
 
+import com.shin.depthflow.util.GenerationNotifier
+import com.shin.depthflow.util.AppScope
+
 import com.shin.depthflow.util.Logger
 import android.app.Application
 import android.content.Context
@@ -28,6 +31,8 @@ import com.shin.depthflow.data.PaymentHistoryItem
 import java.text.SimpleDateFormat
 import java.util.Locale
 import com.shin.depthflow.R
+import com.google.firebase.analytics.FirebaseAnalytics
+import android.os.Bundle
 import org.json.JSONObject
 import retrofit2.HttpException
 
@@ -36,11 +41,35 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val repository = DepthFlowRepository(application)
     private val sessionManager = SessionManager(application) // <-- ADD THIS
+    private val analytics by lazy { 
+        try {
+            FirebaseAnalytics.getInstance(application)
+        } catch (e: Exception) {
+            Logger.e("DepthFlowViewModel", "Firebase Analytics initialization failed", e)
+            null
+        }
+    }
+
+    fun logEvent(name: String, params: Bundle? = null) {
+        try {
+            analytics?.logEvent(name, params)
+        } catch (e: Exception) {
+            Logger.e("DepthFlowViewModel", "Failed to log event: $name", e)
+        }
+    }
 
     // ==========================================
     // --- NEW: AUTH & CREDITS STATE ---
     // ==========================================
     private var jwtToken: String? = null
+
+    // Raw JWT (no "Bearer " prefix) mirrored for other ViewModels (e.g. HappyHourViewModel).
+    private val _authToken = MutableStateFlow<String?>(null)
+    val authToken: StateFlow<String?> = _authToken.asStateFlow()
+
+    // Fires after the backend verified a Play purchase (Happy Hour tokens are granted there).
+    private val _purchaseVerified = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val purchaseVerified: kotlinx.coroutines.flow.SharedFlow<Unit> = _purchaseVerified
 
     private val _credits = MutableStateFlow(0)
     val credits: StateFlow<Int> = _credits.asStateFlow()
@@ -196,6 +225,12 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun logout() {
+        // Unregister this device from push with the JWT that is about to be discarded.
+        // Best effort and independent of the local sign-out (offline or an already-expired
+        // token must not block logging out).
+        jwtToken?.let { bearer ->
+            viewModelScope.launch { com.shin.depthflow.push.PushRegistrar.unregister(bearer) }
+        }
         viewModelScope.launch {
             sessionManager.clearSession() // <-- DELETE FROM DEVICE
             jwtToken = null
@@ -271,6 +306,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
         // Collect Auth Token from SessionManager
         viewModelScope.launch {
             sessionManager.authTokenFlow.collect { token ->
+                _authToken.value = token?.takeIf { it.isNotEmpty() }
                 if (!token.isNullOrEmpty()) {
                     jwtToken = "Bearer $token"
                     _isLoggedIn.value = true
@@ -327,6 +363,14 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 profile.next_credit_drop_date?.let { rawDate ->
                     _nextCreditDropDate.value = formatRenewalDate(rawDate)
                 }
+                
+                // NEW: Robustly handle potential subscription end date if status isn't just "active"
+                if (_subscriptionStatus.value.contains("cancel", ignoreCase = true) || 
+                    _subscriptionStatus.value.contains("end", ignoreCase = true)) {
+                    profile.subscription_end_date?.let {
+                        _userPlanRenewalDate.value = formatRenewalDate(it)
+                    }
+                }
 
                 Logger.d("DepthFlowAuth", "✅ Profile synced: ${profile.email} (${profile.credits} Credits)")
 
@@ -371,11 +415,24 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 // Real Renewal Date parsing
                 val status = billing.platform.status
                 val nextBilling = billing.platform.next_billing_date
+                
+                // Sync the detailed status to the UI
+                _subscriptionStatus.value = status
 
-                if (status.contains("Scheduled for cancellation", ignoreCase = true)) {
+                if (status.contains("Scheduled for cancellation", ignoreCase = true) || 
+                    status.contains("canceled", ignoreCase = true) || 
+                    status.contains("cancelled", ignoreCase = true)) {
+                    
                     // Extract date from "Scheduled for cancellation on 2027-05-21"
                     val extractedDate = status.substringAfterLast(" ").trim().removeSuffix(".")
-                    _userPlanRenewalDate.value = formatRenewalDate(extractedDate)
+                    
+                    if (extractedDate.length >= 10 && extractedDate.any { it.isDigit() }) {
+                         _userPlanRenewalDate.value = formatRenewalDate(extractedDate)
+                    } else if (!nextBilling.isNullOrEmpty() && nextBilling != "N/A") {
+                        _userPlanRenewalDate.value = formatRenewalDate(nextBilling)
+                    } else {
+                        _userPlanRenewalDate.value = "N/A"
+                    }
                 } else if (!nextBilling.isNullOrEmpty() && nextBilling != "N/A") {
                     _userPlanRenewalDate.value = formatRenewalDate(nextBilling)
                 } else {
@@ -413,6 +470,7 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
                 // Refresh the whole profile to get all new credit/plan details safely
                 fetchUserProfile()
                 fetchBillingInfo() // NEW: Also refresh billing info
+                _purchaseVerified.tryEmit(Unit) // Happy Hour tokens are granted inside verify-purchase
             } catch (e: Exception) {
                 Logger.e("BillingTest", "7. Backend verification FAILED: ${e.message}")
             }
@@ -505,7 +563,11 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     // 2. UPDATE THE FUNCTION SIGNATURE
-    fun generate3DMotion() {
+    /**
+     * @param skipCreditCheck true while Happy Hour is active: generation is free then, and the
+     * server is the authority anyway (it answers 402 if the user is not actually entitled).
+     */
+    fun generate3DMotion(skipCreditCheck: Boolean = false) {
         val uri = _selectedImageUri.value
         val token = jwtToken
 
@@ -528,36 +590,86 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
             else -> 20
         }
 
-        if (_credits.value < dynamicCost) {
+        if (!skipCreditCheck && _credits.value < dynamicCost) {
             _uiState.value = PipelineState.Error(getApplication<Application>().getString(R.string.err_insufficient_credits, dynamicCost))
+            logEvent("insufficient_credits", Bundle().apply {
+                putInt("cost", dynamicCost)
+                putInt("balance", _credits.value)
+            })
             return
         }
 
-        viewModelScope.launch {
+        // AppScope, not viewModelScope: the request must survive leaving the screen. GenerationService
+        // (started through GenerationNotifier) keeps the process alive meanwhile.
+        AppScope.launch {
+            logEvent("generate_3d_start", Bundle().apply {
+                putString("style", _motionPath.value)
+                putInt("duration", duration)
+                putString("plan", _userPlan.value)
+            })
             val renderSettings = mapOf(
                 "duration" to duration,
                 "fps" to _fpsValue.value.replace("p", "").toInt(),
                 "ssaa" to _ssaaValue.value.replace("x", "").toDouble(),
-                "bokeh_quality" to _bokehQuality.value
+                "quality" to when(_bokehQuality.value) {
+                    "High (100)" -> 100
+                    "Medium (80)" -> 80
+                    else -> 50
+                }
             )
 
             val motionSettings = mapOf(
                 "style" to _motionPath.value,
-                "intensity" to _depthIntensity.value,
+                "amplitude" to _depthIntensity.value,
                 "speed" to _speedValue.value,
                 "focus" to _focusValue.value,
-                "cinematic_intensity" to _cinematicIntensity.value,
-                "mode" to _motionMode.value
+                "reverse" to _reverseMode.value,
+                "smooth" to _smoothMode.value,
+                "loop" to _loopMode.value
             )
 
+            val effectsSettings = mapOf(
+                "dof_enable" to (_cinematicIntensity.value > 0),
+                "dof_intensity" to _cinematicIntensity.value
+            )
+
+            val app = getApplication<Application>()
+            try {
             repository.processImage(
                 imageUri = uri,
                 token = token,
                 renderSettings = renderSettings,
-                motionSettings = motionSettings
+                motionSettings = motionSettings,
+                effectsSettings = effectsSettings,
+                plan = _userPlan.value.lowercase()
             ).collect { state ->
                 _uiState.value = state
-                if (state is PipelineState.Success) fetchUserProfile()
+                // Progress notification (local: the backend sends no progress events).
+                when (state) {
+                    is PipelineState.Uploading -> GenerationNotifier.showProgress(app, GenerationNotifier.Stage.UPLOADING)
+                    is PipelineState.Processing -> GenerationNotifier.showProgress(app, GenerationNotifier.Stage.RENDERING)
+                    is PipelineState.Success -> GenerationNotifier.showSuccess(app)
+                    is PipelineState.Error -> GenerationNotifier.showError(app, state.errorMessage)
+                    PipelineState.Idle -> Unit
+                }
+                if (state is PipelineState.Success) {
+                    logEvent("generate_3d_success", Bundle().apply {
+                        putString("style", state.motionPath)
+                        putFloat("amplitude", state.amplitude)
+                    })
+                    state.remainingCredits?.let {
+                        _credits.value = it
+                    } ?: fetchUserProfile()
+                } else if (state is PipelineState.Error) {
+                    logEvent("generate_3d_error", Bundle().apply {
+                        putString("message", state.errorMessage)
+                    })
+                }
+            }
+            } finally {
+                // Cancelled (e.g. the ViewModel was cleared) or the flow ended without a result:
+                // never leave a spinning notification behind. A no-op after Success/Error.
+                GenerationNotifier.finish(app)
             }
         }
     }
@@ -666,8 +778,16 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
     private val _activeSettingsTab = MutableStateFlow(application.getString(R.string.default_settings_tab))
     val activeSettingsTab = _activeSettingsTab.asStateFlow()
 
+    private val _shouldScrollToSettings = MutableStateFlow(false)
+    val shouldScrollToSettings = _shouldScrollToSettings.asStateFlow()
+
+    fun setScrollTrigger(shouldScroll: Boolean) {
+        _shouldScrollToSettings.value = shouldScroll
+    }
+
     fun setActiveSettingsTab(tab: String) {
         _activeSettingsTab.value = tab
+        _shouldScrollToSettings.value = true
     }
 
     // --- NEW: Workspace Settings States ---
@@ -687,10 +807,6 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
     val fpsValue = _fpsValue.asStateFlow()
     fun setFpsValue(value: String) { _fpsValue.value = value }
 
-    private val _cameraStyle = MutableStateFlow(application.getString(R.string.default_camera_style))
-    val cameraStyle = _cameraStyle.asStateFlow()
-    fun setCameraStyle(value: String) { _cameraStyle.value = value }
-
     private val _focusValue = MutableStateFlow(0f)
     val focusValue = _focusValue.asStateFlow()
     fun setFocusValue(value: Float) { _focusValue.value = value }
@@ -703,9 +819,18 @@ class DepthFlowViewModel(application: Application) : AndroidViewModel(applicatio
     val bokehQuality = _bokehQuality.asStateFlow()
     fun setBokehQuality(value: String) { _bokehQuality.value = value }
 
-    private val _motionMode = MutableStateFlow(application.getString(R.string.default_motion_mode))
-    val motionMode = _motionMode.asStateFlow()
-    fun setMotionMode(value: String) { _motionMode.value = value }
+    // --- NEW: Independent Motion Modes ---
+    private val _reverseMode = MutableStateFlow(false)
+    val reverseMode = _reverseMode.asStateFlow()
+    fun setReverseMode(value: Boolean) { _reverseMode.value = value }
+
+    private val _smoothMode = MutableStateFlow(true)
+    val smoothMode = _smoothMode.asStateFlow()
+    fun setSmoothMode(value: Boolean) { _smoothMode.value = value }
+
+    private val _loopMode = MutableStateFlow(true)
+    val loopMode = _loopMode.asStateFlow()
+    fun setLoopMode(value: Boolean) { _loopMode.value = value }
 }
 
 

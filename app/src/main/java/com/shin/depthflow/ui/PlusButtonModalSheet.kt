@@ -90,6 +90,7 @@ fun PlusButtonModalSheet(
         // 3. The Content Area
         Column(
             modifier = Modifier
+                .windowInsetsPadding(WindowInsets.navigationBars)
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp)
                 // Prevents clicks on the content from dismissing the sheet

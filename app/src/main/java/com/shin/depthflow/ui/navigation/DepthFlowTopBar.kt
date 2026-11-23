@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Icon
@@ -19,22 +20,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.shin.depthflow.R
-import com.shin.depthflow.ui.theme.BackgroundDark
 import com.shin.depthflow.ui.theme.DepthFlowPurple
-import com.shin.depthflow.ui.theme.SurfaceDark
 
 @Composable
 fun DepthFlowTopBar(
     credits: Int,
     isLoggedIn: Boolean = false,
     onLoginClick: () -> Unit = {},
-    onNotificationClick: () -> Unit = {}
+    unreadCount: Int = 0,
+    onNotificationsClick: () -> Unit = {}
 ) {
+    val uriHandler = LocalUriHandler.current
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -58,6 +61,38 @@ fun DepthFlowTopBar(
             if (isLoggedIn) {
                 // 1. Dynamic Credits Pill
                 CreditsPill(credits)
+                // Notification bell with unread badge
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .clickable { onNotificationsClick() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Notifications,
+                        contentDescription = "Notifications",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    if (unreadCount > 0) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFF4B4B)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (unreadCount > 9) "9+" else unreadCount.toString(),
+                                color = Color.White,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
             } else {
                 // Login Button for unauthenticated users
                 Box(
@@ -77,17 +112,17 @@ fun DepthFlowTopBar(
                     )
                 }
             }
-            // 2. Notification Bell
+            // 2. Website Icon
             Box(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .clickable { onNotificationClick() },
+                    .clickable { uriHandler.openUri("https://www.depthflow.io/") },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Default.Public,
-                    contentDescription = "Alerts",
+                    contentDescription = "Website",
                     tint = Color.White,
                     modifier = Modifier.size(24.dp)
                 )

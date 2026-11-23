@@ -8,6 +8,9 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -28,7 +31,12 @@ sealed class PipelineState {
         val videoUri: Uri,
         val originalUri: Uri?,
         val motionPath: String,
-        val intensity: Float
+        val amplitude: Float,
+        val remainingCredits: Int? = null,
+        // Happy Hour response headers (server decides; the app only reflects them)
+        val happyHourActive: Boolean = false,
+        val happyHourRemainingVideos: Int? = null,
+        val cost: Int? = null
     ) : PipelineState()
     data class Error(val errorMessage: String) : PipelineState()
 }
@@ -38,36 +46,8 @@ class DepthFlowRepository(private val context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val projectDao = database.projectDao()
 
-    // 10.0.2.2 is the Android Emulator's alias for your machine's localhost (127.0.0.1)
-    private var backendUrl: String = "https://api.depthflow.io/"
-
-    private val apiService: DepthFlowApiService? by lazy {
-        try {
-            val logging = HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
-            }
-            val okHttpClient = OkHttpClient.Builder()
-                .connectTimeout(60, TimeUnit.SECONDS)
-                .readTimeout(180, TimeUnit.SECONDS)
-                .addInterceptor(logging)
-                .build()
-
-            // 1. ADD THIS: Build a Moshi instance with the Kotlin Adapter
-            val moshi = Moshi.Builder()
-                .add(KotlinJsonAdapterFactory())
-                .build()
-
-            // 2. Pass it into Retrofit
-            Retrofit.Builder()
-                .baseUrl(backendUrl)
-                .client(okHttpClient)
-                .addConverterFactory(MoshiConverterFactory.create(moshi))
-                .build()
-                .create(DepthFlowApiService::class.java)
-        } catch (e: Exception) {
-            null
-        }
-    }
+    // Shared Retrofit client (base URL comes from BuildConfig.BASE_URL).
+    private val apiService: DepthFlowApiService? get() = ApiClient.service
 
     suspend fun loginUser(email: String, password: String): LoginResponse {
         val response = apiService?.login(LoginRequest(email, password))
@@ -197,7 +177,9 @@ class DepthFlowRepository(private val context: Context) {
         imageUri: Uri,
         token: String,
         renderSettings: Map<String, Any>,
-        motionSettings: Map<String, Any>
+        motionSettings: Map<String, Any>,
+        effectsSettings: Map<String, Any>,
+        plan: String
     ): Flow<PipelineState> = flow {
 
         emit(PipelineState.Uploading(0))
@@ -219,9 +201,20 @@ class DepthFlowRepository(private val context: Context) {
             // 2. Create a dynamic JSON payload.
             val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
             val adapter = moshi.adapter(Map::class.java)
+
+            // Convert style name to API format (lowercase with underscores)
+            val apiMotionSettings = motionSettings.toMutableMap().apply {
+                val prettyStyle = this["style"] as? String
+                if (prettyStyle != null) {
+                    this["style"] = prettyStyle.lowercase().replace(" ", "_")
+                }
+            }
+
             val fullPayload = mapOf(
                 "render" to renderSettings,
-                "motion" to motionSettings
+                "motion" to apiMotionSettings,
+                "effects" to effectsSettings,
+                "plan" to plan
             )
             val payloadJson = adapter.toJson(fullPayload)
 
@@ -242,26 +235,32 @@ class DepthFlowRepository(private val context: Context) {
             if (response != null && response.isSuccessful) {
                 // Success! Save the video to a file
                 val responseBody = response.body()
+                val remainingCredits = response.headers()["X-Remaining-Credits"]?.toIntOrNull()
+                val happyHourActive = response.headers()["X-Happy-Hour"].equals("active", ignoreCase = true)
+                val happyHourRemaining = response.headers()["X-Happy-Hour-Remaining-Videos"]?.toIntOrNull()
+                val cost = response.headers()["X-Cost"]?.toIntOrNull()
+
                 if (responseBody != null) {
                     val videoFile = saveVideoToFile(context, responseBody, originalName)
                     if (videoFile != null) {
                         val videoUri = Uri.fromFile(videoFile)
                         val motionPath = (motionSettings["style"] as? String) ?: "Dolly"
-                        val depthIntensity = (motionSettings["intensity"] as? Number)?.toFloat() ?: 1.0f
+                        val amplitude = (motionSettings["amplitude"] as? Number)?.toFloat() ?: 1.0f
                         
                         // NEW: Save to local project history
+                        val projectTitle = "${originalName}_${motionPath}"
                         val project = ProjectEntity(
                             id = java.util.UUID.randomUUID().toString(),
-                            title = originalName,
+                            title = projectTitle,
                             imageUrl = imageUri.toString(),
                             videoUrl = videoUri.toString(),
                             timestamp = System.currentTimeMillis(),
                             motionPath = motionPath,
-                            intensity = depthIntensity
+                            intensity = amplitude
                         )
                         saveProject(project)
 
-                        emit(PipelineState.Success(videoUri, imageUri, motionPath, depthIntensity))
+                        emit(PipelineState.Success(videoUri, imageUri, motionPath, amplitude, remainingCredits, happyHourActive, happyHourRemaining, cost))
                     } else {
                         emit(PipelineState.Error("Failed to save video file."))
                     }
@@ -270,18 +269,27 @@ class DepthFlowRepository(private val context: Context) {
                 }
             } else {
                 // Handle FastAPI 402 Payment Required or 500 Server Error
-                val errorMsg = response?.errorBody()?.string() ?: "Unknown Server Error"
-                emit(PipelineState.Error("Generation failed: $errorMsg"))
+                val raw = response?.errorBody()?.string()
+                // Prefer the server's human-readable `detail` (e.g. 402 insufficient credits)
+                val detail = try {
+                    (ApiClient.moshi.adapter(Map::class.java).fromJson(raw ?: "")?.get("detail")) as? String
+                } catch (e: Exception) { null }
+                emit(PipelineState.Error("Generation failed: ${detail ?: raw ?: "Unknown Server Error"}"))
             }
+        } catch (e: CancellationException) {
+            throw e // cancelled, not a network error
         } catch (e: Exception) {
             Logger.e("DepthFlow", "Generation failed", e)
             emit(PipelineState.Error("Network error: ${e.message}"))
         }
     }
+        // File copy, upload, MP4 save and the Room insert run off the main thread;
+        // the collector still receives states on its own (main) dispatcher.
+        .flowOn(Dispatchers.IO)
 
     private fun saveVideoToFile(context: Context, responseBody: okhttp3.ResponseBody, originalName: String): File? {
         return try {
-            val videoFile = File(context.cacheDir, "generated_3d_${originalName}.mp4")
+            val videoFile = File(context.cacheDir, "generated_3d_${originalName}_${System.currentTimeMillis()}.mp4")
             responseBody.byteStream().use { inputStream ->
                 FileOutputStream(videoFile).use { outputStream ->
                     inputStream.copyTo(outputStream)
@@ -317,6 +325,40 @@ class DepthFlowRepository(private val context: Context) {
             null
         }
     }
+
+    // --- Happy Hour / notifications: HTTP failures surface as ApiException(code, detail) ---
+    private suspend fun <T> call(block: suspend (DepthFlowApiService) -> T): T {
+        val api = apiService ?: throw Exception("API Service not initialized")
+        try {
+            return block(api)
+        } catch (e: retrofit2.HttpException) {
+            throw e.toApiException()
+        }
+    }
+
+    suspend fun getEligiblePopups(token: String) = call { it.getEligiblePopups(token) }
+
+    suspend fun trackPopup(token: String, id: Int) = call { it.trackPopup(token, id) }
+
+    suspend fun getActiveBanner() = call { it.getActiveBanner() }
+
+    suspend fun getWhatsNew() = call { it.getWhatsNew() }
+
+    suspend fun getHappyHourStatus(token: String) = call { it.getHappyHourStatus(token) }
+
+    suspend fun activateHappyHour(token: String, idempotencyKey: String) =
+        call { it.activateHappyHour(token, idempotencyKey) }
+
+    suspend fun getHappyHourHistory(token: String) = call { it.getHappyHourHistory(token) }
+
+    suspend fun getNotifications(token: String, beforeId: Long? = null) =
+        call { it.getNotifications(token, beforeId = beforeId) }
+
+    suspend fun getUnreadCount(token: String) = call { it.getUnreadCount(token) }
+
+    suspend fun markNotificationRead(token: String, id: Long) = call { it.markNotificationRead(token, id) }
+
+    suspend fun markAllNotificationsRead(token: String) = call { it.markAllNotificationsRead(token) }
 
     suspend fun fetchUserProfile(token: String): UserProfileResponse {
         return apiService?.getUserProfile(token)

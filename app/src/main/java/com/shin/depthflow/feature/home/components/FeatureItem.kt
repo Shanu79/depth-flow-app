@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import com.shin.depthflow.ui.theme.cardBackgroundBrush
 import com.shin.depthflow.ui.theme.sectionContainerOuter
 import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
 
 data class FeatureItem(
     val icon: Int,
@@ -85,7 +86,7 @@ fun FeatureCardsSection(
     // Carousel Effect: Automatically cycles to the next card every 3 seconds.
     // Because it is keyed to `selectedIndex`, clicking a card manually resets the timer automatically!
     LaunchedEffect(selectedIndex) {
-        delay(3000L) // Wait 3 seconds
+        delay(3000L.milliseconds) // Wait 3 seconds
         selectedIndex = (selectedIndex + 1) % features.size // Move to next, loop back to 0 at the end
     }
 
